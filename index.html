@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="nl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SPREY - Rhino Spray Wall</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- React & ReactDOM CDN -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <!-- Babel CDN voor JSX compilatie in de browser -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+      body {
+        margin: 0;
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        -webkit-tap-highlight-color: transparent;
+      }
+    </style>
+  </head>
+  <body class="bg-slate-100 text-slate-900 antialiased">
+    <div id="root"></div>
+
+    <!-- Firebase SDK Imports -->
+    <script type="module">
+      import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+      import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+      import { getFirestore, doc, setDoc, addDoc, updateDoc, deleteDoc, onSnapshot, collection } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+      // Globale Firebase variabelen voor de React app
+      window.firebaseApp = initializeApp(JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{"apiKey":"demo","authDomain":"demo.firebaseapp.com","projectId":"demo-project"}'));
+      window.db = getFirestore(window.firebaseApp);
+      window.auth = getAuth(window.firebaseApp);
+      window.appId = typeof __app_id !== 'undefined' ? __app_id : 'sprey-rhino-gent-v2';
+    </script>
+
+    <!-- React App Script -->
+    <script type="text/babel" data-presets="react">
+      const { useState, useEffect, useRef, useMemo } = React;
+      // Firebase helpers uit window object
+      const db = window.db;
+      const auth = window.auth;
+      const appId = window.appId;
+
+      const FONT_GRADES = ['4', '5', '5+', '6A', '6A+', '6B', '6B+', '6C', '6C+', '7A', '7A+', '7B', '7B+', '7C', '8A'];
+
+      const HOLD_TYPES = {
+        START: { id: 'START', label: 'Startgreep', shortLabel: 'START', color: '#16a34a' },
+        HAND_FOOT: { id: 'HAND_FOOT', label: 'Hand & Voet', shortLabel: 'H/V', color: '#7c3aed' },
+        FOOT_ONLY: { id: 'FOOT_ONLY', label: 'Enkel Voet', shortLabel: 'VOET', color: '#f59e0b' },
+        TOP: { id: 'TOP', label: 'Eindgreep (Top)', shortLabel: 'TOP', color: '#e11d48' }
+      };
+
+      const RULE_TAGS = ['Zitstart', 'Staanstart', 'Alle voeten vrij', 'Voeten volgen handen', 'Geen volumes', 'Top vasthouden 2s'];
+
+      function getGradeVerdict(setterGrade, sends = []) {
+        if (!sends || sends.length === 0) return { label: 'Eerste Beoordeling', tone: 'normal' };
+        const avgIdx = calculateConsensusGrade(setterGrade, sends);
+        const sIdx = FONT_GRADES.indexOf(setterGrade);
+        const cIdx = FONT_GRADES.indexOf(avgIdx);
+        if (cIdx > sIdx + 1) return { label: 'Sandbagged! 🎒 (Pittiger)', tone: 'sandbag' };
+        if (cIdx < sIdx - 1) return { label: 'Softie 🪶 (Vrij makkelijk)', tone: 'soft' };
+        return { label: 'Eerlijke Graad ✓', tone: 'normal' };
+      }
+
+      function calculateConsensusGrade(setterGrade, sends = []) {
+        const allGrades = [setterGrade, ...sends.map(s => s.votedGrade).filter(Boolean)];
+        const validIndices = allGrades.map(g => FONT_GRADES.indexOf(g)).filter(idx => idx !== -1);
+        if (validIndices.length === 0) return setterGrade || '6A';
+        const sum = validIndices.reduce((a, b) => a + b, 0);
+        return FONT_GRADES[Math.round(sum / validIndices.length)] || setterGrade;
+      }
+
+      function getHoldPoints(hold) {
+        if (Array.isArray(hold.points) && hold.points.length >= 3) return hold.points;
+        const cx = hold.x ?? 50, cy = hold.y ?? 50, r = hold.r ?? 3.5;
+        const pts = [];
+        for (let i = 0; i < 10; i++) {
+          const a = (i / 10) * Math.PI * 2;
+          pts.push({ x: Number((cx + Math.cos(a) * r).toFixed(2)), y: Number((cy + Math.sin(a) * (r * 0.82)).toFixed(2)) });
+        }
+        return pts;
+      }
+
+      function getPolygonMetrics(points) {
+        if (!points || points.length === 0) return { cx: 50, cy: 50, minX: 48, maxX: 52, minY: 48, maxY: 52, area: 16 };
+        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, sumX = 0, sumY = 0;
+        points.forEach(p => {
+          if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
+          if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
+          sumX += p.x; sumY += p.y;
+        });
+        let area = 0;
+        for (let i = 0; i < points.length; i++) {
+          const j = (i + 1) % points.length;
+          area += points[i].x * points[j].y;
+          area -= points[j].x * points[i].y;
+        }
+        return { cx: Number((sumX / points.length).toFixed(2)), cy: Number((sumY / points.length).toFixed(2)), minX, maxX, minY, maxY, area: Math.abs(area) / 2 };
+      }
+
+      function scalePolygonPoints(points, factor) {
+        const { cx, cy } = getPolygonMetrics(points);
+        return points.map(p => ({
+          x: Number(Math.max(0.5, Math.min(99.5, cx + (p.x - cx) * factor)).toFixed(2)),
+          y: Number(Math.max(0.5, Math.min(99.5, cy + (p.y - cy) * factor)).toFixed(2))
+        }));
+      }
+
+      function getDefaultHolds() {
+        return [
+          { id: 'vol_left_green', layer: 0, isVolume: true, visualColor: '#2d6a5e', points: [{x:1.5,y:19.5},{x:34.5,y:39.2},{x:1.5,y:48.0}] },
+          { id: 'vol_right_grey', layer: 0, isVolume: true, visualColor: '#64707d', points: [{x:78.5,y:1.5},{x:99.0,y:1.5},{x:99.0,y:52.0},{x:54.0,y:26.5}] },
+          { id: 'h_banana_yellow', layer: 1, visualColor: '#f59e0b', points: [{x:46.5,y:14.5},{x:51.5,y:17.5},{x:54.0,y:35.0},{x:58.0,y:40.5},{x:45.5,y:39.0},{x:39.0,y:32.5},{x:42.5,y:17.0}] },
+          { id: 'h_top_pink_sloper', layer: 1, visualColor: '#db5475', points: [{x:15.0,y:0.8},{x:34.5,y:0.8},{x:35.0,y:6.5},{x:28.5,y:12.2},{x:15.2,y:7.2}] },
+          { id: 'h_stacked_white_on_purple_crescent', layer: 2, isStacked: true, visualColor: '#f8fafc', points: [{x:82.5,y:33.8},{x:87.5,y:34.5},{x:88.2,y:39.2},{x:81.5,y:36.8}] }
+        ];
+      }
+
+      function generateDefaultWallDataUrl() {
+        const canvas = document.createElement('canvas');
+        canvas.width = 800; canvas.height = 1000;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#d8b48a';
+        ctx.fillRect(0, 0, 800, 1000);
+        getDefaultHolds().forEach(h => {
+          ctx.beginPath();
+          h.points.forEach((p, i) => {
+            const px = (p.x / 100) * 800, py = (p.y / 100) * 1000;
+            if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+          });
+          ctx.closePath();
+          ctx.fillStyle = h.visualColor;
+          ctx.fill();
+        });
+        return canvas.toDataURL('image/jpeg', 0.85);
+      }
+
+      // Logo Component met de grappige Rhino parodie
+      function SpreyMascotLogo({ onSprayClick }) {
+        const [bouncing, setBouncing] = useState(false);
+        return (
+          <button type="button" onClick={(e) => { e.stopPropagation(); setBouncing(true); if(onSprayClick) onSprayClick(); setTimeout(() => setBouncing(false), 750); }} className="relative group flex items-center gap-3 text-left focus:outline-none select-none">
+            <div className="relative w-14 h-14 rounded-full bg-[#262626] border-2 border-slate-900 shadow-[2px_2px_0px_#7c3aed] flex items-center justify-center shrink-0">
+              <svg viewBox="0 0 120 120" className={`w-14 h-14 overflow-visible transition-transform duration-300 ${bouncing ? 'scale-110 -rotate-6' : ''}`}>
+                <circle cx="60" cy="60" r="58" fill="#262626" />
+                <circle cx="60" cy="60" r="53.5" fill="none" stroke="#f8fafc" strokeWidth="3.2" />
+                <line x1="20" y1="69.5" x2="100" y2="69.5" stroke="#f8fafc" strokeWidth="2.8" strokeLinecap="round" />
+                <path d="M 27,69.5 C 27,64.5 36,64.5 37,69.5 Z" fill="#7c3aed" stroke="#18181b" strokeWidth="1.2" />
+                <polygon points="28,58 26,52 34,47 31,37 39,38 51,26 95,43 99,58 96,49 95,55 91,68.2 82,68.2 86,56 75,55 64,57 48,55 41,66 33,66 41,51 35,58" fill="#f8fafc" stroke="#262626" strokeWidth="2" strokeLinejoin="round" />
+                <polygon points="26,52 15,41 31,47" fill="#7c3aed" stroke="#262626" strokeWidth="1.6" strokeLinejoin="round" />
+                <circle cx="36.5" cy="46.5" r="5.2" fill="#ffffff" stroke="#262626" strokeWidth="2" />
+                <circle cx="34.8" cy="46.8" r="2.3" fill="#0f172a" />
+                <text x="60" y="88.5" textAnchor="middle" fill="#f8fafc" fontSize="20" fontWeight="900" fontFamily="sans-serif">RHINO</text>
+              </svg>
+            </div>
+            <div>
+              <div className="flex items-center gap-1.5">
+                <span className="text-xl font-black tracking-tight text-slate-900 leading-none">SPREY</span>
+                <span className="text-[9px] font-black uppercase px-1.5 py-0.5 rounded bg-violet-600 text-white">GENT</span>
+              </div>
+              <p className="text-[10px] font-bold text-slate-500 mt-0.5">Spray Wall Boulders</p>
+            </div>
+          </button>
+        );
+      }
+
+      function App() {
+        const [user, setUser] = useState(null);
+        const [climberName, setClimberName] = useState('RhinoKlimmer');
+        const [activeTab, setActiveTab] = useState('ROUTES');
+        const [wallData, setWallData] = useState({ name: 'Rhino Spray Wall • Gent', imageUrl: '', holds: [] });
+        const [routes, setRoutes] = useState([]);
+        const [selectedRouteId, setSelectedRouteId] = useState(null);
+        const [statusBanner, setStatusBanner] = useState(null);
+
+        const notify = (msg) => {
+          setStatusBanner(msg);
+          setTimeout(() => setStatusBanner(null), 3500);
+        };
+
+        useEffect(() => {
+          const init = async () => {
+            try {
+              if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                await signInWithCustomToken(auth, __initial_auth_token);
+              } else {
+                await signInAnonymously(auth);
+              }
+            } catch(e) { console.error(e); }
+          };
+          init();
+          return onAuthStateChanged(auth, u => setUser(u));
+        }, []);
+
+        useEffect(() => {
+          if (!user) return;
+          const wallRef = doc(db, 'artifacts', appId, 'public', 'data', 'spraywalls', 'sprey_rhino_wall_v2');
+          const unsubWall = onSnapshot(wallRef, async snap => {
+            if (snap.exists()) {
+              setWallData(snap.data());
+            } else {
+              const def = { name: 'Rhino Spray Wall • Gent', imageUrl: generateDefaultWallDataUrl(), holds: getDefaultHolds(), updatedAt: Date.now() };
+              setWallData(def);
+              await setDoc(wallRef, def);
+            }
+          });
+
+          const routesCol = collection(db, 'artifacts', appId, 'public', 'data', 'sprey_routes_v2');
+          const unsubRoutes = onSnapshot(routesCol, snap => {
+            const loaded = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+            setRoutes(loaded);
+          });
+
+          return () => { unsubWall(); unsubRoutes(); };
+        }, [user]);
+
+        return (
+          <div className="min-h-screen bg-slate-100 text-slate-900 pb-24 font-sans">
+            {statusBanner && (
+              <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 max-w-sm w-[90%] bg-slate-900 text-white px-4 py-3 rounded-2xl shadow-xl font-bold text-xs flex items-center justify-between">
+                <span>{statusBanner}</span>
+                <button onClick={() => setStatusBanner(null)} className="text-violet-400">✕</button>
+              </div>
+            )}
+
+            <header className="sticky top-0 z-30 bg-white/95 backdrop-blur border-b-2 border-slate-900 px-4 py-2.5">
+              <div className="max-w-xl mx-auto flex items-center justify-between">
+                <SpreyMascotLogo onSprayClick={() => notify('🦏 Allez, pof je handen in!')} />
+                <div className="px-3 py-1.5 rounded-xl bg-slate-100 border-2 border-slate-900 text-xs font-black">
+                  {climberName}
+                </div>
+              </div>
+            </header>
+
+            <main className="max-w-xl mx-auto px-4 pt-4">
+              {activeTab === 'ROUTES' && (
+                <div className="space-y-3">
+                  <div className="bg-white border-2 border-slate-900 rounded-3xl p-4 shadow-[3px_3px_0px_#cbd5e1]">
+                    <h2 className="text-base font-black">Rhino Spray Wall Boulders ({routes.length})</h2>
+                    <p className="text-xs text-slate-500 font-medium mt-0.5">Kies een boulder om te klimmen en duid je sends aan.</p>
+                  </div>
+
+                  {routes.length === 0 ? (
+                    <div className="text-center py-12 text-slate-500 font-bold text-xs">Nog geen boulders geladen.</div>
+                  ) : (
+                    routes.map(r => (
+                      <div key={r.id} className="bg-white border-2 border-slate-900 rounded-2xl p-3.5 shadow-[3px_3px_0px_#cbd5e1] flex items-center justify-between">
+                        <div>
+                          <h3 className="font-black text-sm">{r.name}</h3>
+                          <p className="text-xs text-slate-500 font-semibold">Door {r.setter} • Font {r.setterGrade}</p>
+                        </div>
+                        <span className="px-2.5 py-1 rounded-lg bg-violet-600 text-white font-black text-xs">Font {r.setterGrade}</span>
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
+
+              {activeTab === 'WALL' && (
+                <div className="bg-white border-2 border-slate-900 rounded-3xl p-4 space-y-3">
+                  <h2 className="text-base font-black">Wand & Grepen</h2>
+                  <p className="text-xs text-slate-600">De spray wall is geladen met al je veelhoek-grepen en volumes.</p>
+                  {wallData.imageUrl && (
+                    <div className="rounded-2xl overflow-hidden border-2 border-slate-900">
+                      <img src={wallData.imageUrl} alt="Spray Wall" className="w-full object-cover" />
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {activeTab === 'FRIENDS' && (
+                <div className="bg-white border-2 border-slate-900 rounded-3xl p-4 space-y-3">
+                  <h2 className="text-base font-black">Delen met Vrienden</h2>
+                  <p className="text-xs text-slate-600">Zet deze app op je beginscherm of deel de link:</p>
+                  <button onClick={() => { navigator.clipboard.writeText(window.location.href); notify('Link gekopieerd!'); }} className="w-full py-3 bg-violet-600 text-white font-black rounded-xl text-xs border-2 border-slate-900 shadow-[2px_2px_0px_#0f172a]">
+                    Kopieer App Link
+                  </button>
+                </div>
+              )}
+            </main>
+
+            <nav className="fixed bottom-0 inset-x-0 z-40 bg-white/95 backdrop-blur border-t-2 border-slate-900 px-3 py-2">
+              <div className="max-w-md mx-auto grid grid-cols-3 gap-2">
+                <button onClick={() => setActiveTab('ROUTES')} className={`py-2 rounded-xl font-black text-xs border-2 border-slate-900 ${activeTab === 'ROUTES' ? 'bg-violet-600 text-white' : 'bg-slate-50 text-slate-800'}`}>Boulders</button>
+                <button onClick={() => setActiveTab('WALL')} className={`py-2 rounded-xl font-black text-xs border-2 border-slate-900 ${activeTab === 'WALL' ? 'bg-violet-600 text-white' : 'bg-slate-50 text-slate-800'}`}>Wand</button>
+                <button onClick={() => setActiveTab('FRIENDS')} className={`py-2 rounded-xl font-black text-xs border-2 border-slate-900 ${activeTab === 'FRIENDS' ? 'bg-violet-600 text-white' : 'bg-slate-50 text-slate-800'}`}>Vrienden</button>
+              </div>
+            </nav>
+          </div>
+        );
+      }
+
+      ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+    </script>
+  </body>
+</html>
