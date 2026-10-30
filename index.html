@@ -4,15 +4,8 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>SPREY - Rhino Spray Wall</title>
-    <!-- Tailwind CSS CDN -->
+    <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- React & ReactDOM CDN -->
-    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-    <!-- Babel CDN voor JSX compilatie in de browser -->
-    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    <!-- Lucide Icons -->
-    <script src="https://unpkg.com/lucide@latest"></script>
     <style>
       body {
         margin: 0;
@@ -22,25 +15,37 @@
     </style>
   </head>
   <body class="bg-slate-100 text-slate-900 antialiased">
-    <div id="root"></div>
+    <div id="root">
+      <!-- Laadscherm voor als React opstart -->
+      <div style="display: flex; height: 100vh; align-items: center; justify-content: center; flex-direction: column; font-family: sans-serif; background: #0f172a; color: white;">
+        <div style="font-size: 28px; font-weight: 900; letter-spacing: -1px; margin-bottom: 8px;">SPREY 🦏</div>
+        <div style="font-size: 13px; color: #a78bfa; font-weight: bold;">Rhino Spray Wall wordt geladen...</div>
+      </div>
+    </div>
 
-    <!-- Firebase SDK Imports -->
+    <!-- Firebase SDK UMD Imports -->
     <script type="module">
       import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
       import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
       import { getFirestore, doc, setDoc, addDoc, updateDoc, deleteDoc, onSnapshot, collection } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-      // Globale Firebase variabelen voor de React app
       window.firebaseApp = initializeApp(JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{"apiKey":"demo","authDomain":"demo.firebaseapp.com","projectId":"demo-project"}'));
       window.db = getFirestore(window.firebaseApp);
       window.auth = getAuth(window.firebaseApp);
-      window.appId = typeof __app_id !== 'undefined' ? __app_id : 'sprey-rhino-gent-v2';
+      window.appId = typeof __app_id !== 'undefined' ? __app_id : 'sprey-rhino-gent-v3';
     </script>
 
-    <!-- React App Script -->
+    <!-- React 18 & ReactDOM UMD -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <!-- Lucide Icons UMD -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- Babel voor JSX transpiling in browser -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <!-- Geoptimaliseerde React App Script -->
     <script type="text/babel" data-presets="react">
       const { useState, useEffect, useRef, useMemo } = React;
-      // Firebase helpers uit window object
       const db = window.db;
       const auth = window.auth;
       const appId = window.appId;
@@ -139,9 +144,9 @@
         return canvas.toDataURL('image/jpeg', 0.85);
       }
 
-      // Logo Component met de grappige Rhino parodie
+      // Mascotte Logo Component
       function SpreyMascotLogo({ onSprayClick }) {
-        const [bouncing, setBouncing] = useState(false);
+        const [bouncing, setBouncing] = React.useState(false);
         return (
           <button type="button" onClick={(e) => { e.stopPropagation(); setBouncing(true); if(onSprayClick) onSprayClick(); setTimeout(() => setBouncing(false), 750); }} className="relative group flex items-center gap-3 text-left focus:outline-none select-none">
             <div className="relative w-14 h-14 rounded-full bg-[#262626] border-2 border-slate-900 shadow-[2px_2px_0px_#7c3aed] flex items-center justify-center shrink-0">
@@ -174,7 +179,6 @@
         const [activeTab, setActiveTab] = useState('ROUTES');
         const [wallData, setWallData] = useState({ name: 'Rhino Spray Wall • Gent', imageUrl: '', holds: [] });
         const [routes, setRoutes] = useState([]);
-        const [selectedRouteId, setSelectedRouteId] = useState(null);
         const [statusBanner, setStatusBanner] = useState(null);
 
         const notify = (msg) => {
@@ -198,7 +202,7 @@
 
         useEffect(() => {
           if (!user) return;
-          const wallRef = doc(db, 'artifacts', appId, 'public', 'data', 'spraywalls', 'sprey_rhino_wall_v2');
+          const wallRef = doc(db, 'artifacts', appId, 'public', 'data', 'spraywalls', 'sprey_rhino_wall_v3');
           const unsubWall = onSnapshot(wallRef, async snap => {
             if (snap.exists()) {
               setWallData(snap.data());
@@ -209,10 +213,15 @@
             }
           });
 
-          const routesCol = collection(db, 'artifacts', appId, 'public', 'data', 'sprey_routes_v2');
+          const routesCol = collection(db, 'artifacts', appId, 'public', 'data', 'sprey_routes_v3');
           const unsubRoutes = onSnapshot(routesCol, snap => {
             const loaded = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-            setRoutes(loaded);
+            if (loaded.length === 0) {
+              const sample = { name: 'Purple Rhino Project', setter: 'Thibault', setterGrade: '6B+', rules: ['Zitstart'], holds: { h_banana_yellow: 'HAND_FOOT' }, sends: [], createdAt: Date.now() };
+              addDoc(routesCol, sample);
+            } else {
+              setRoutes(loaded);
+            }
           });
 
           return () => { unsubWall(); unsubRoutes(); };
@@ -245,7 +254,7 @@
                   </div>
 
                   {routes.length === 0 ? (
-                    <div className="text-center py-12 text-slate-500 font-bold text-xs">Nog geen boulders geladen.</div>
+                    <div className="text-center py-12 text-slate-500 font-bold text-xs">Boulders laden...</div>
                   ) : (
                     routes.map(r => (
                       <div key={r.id} className="bg-white border-2 border-slate-900 rounded-2xl p-3.5 shadow-[3px_3px_0px_#cbd5e1] flex items-center justify-between">
